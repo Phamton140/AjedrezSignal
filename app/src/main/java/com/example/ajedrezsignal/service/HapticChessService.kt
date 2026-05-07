@@ -3,24 +3,32 @@ package com.example.ajedrezsignal.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.view.*
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.example.ajedrezsignal.haptic.HapticFeedbackProvider
 import com.example.ajedrezsignal.engine.StockfishBridge
+
 import com.github.bhlangonijr.chesslib.Board
-import com.github.bhlangonijr.chesslib.Move
+import com.github.bhlangonijr.chesslib.move.Move
 import com.github.bhlangonijr.chesslib.Square
+import com.github.bhlangonijr.chesslib.Side
 
 class HapticChessService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: FrameLayout
+    private lateinit var moveCard: TextView
     private lateinit var gestureDetector: GestureDetector
     private lateinit var hapticProvider: HapticFeedbackProvider
     private lateinit var telephonyManager: TelephonyManager
@@ -30,6 +38,7 @@ class HapticChessService : Service() {
     private var originSquare: Square? = null; private var isSelectingOrigin = true
     private var lastBestMove: String? = null
     private var tapCount = 0; private var lastTapTime = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val phoneStateListener = object : PhoneStateListener() {
         override fun onCallStateChanged(state: Int, phoneNumber: String?) {
@@ -40,15 +49,55 @@ class HapticChessService : Service() {
     override fun onCreate() {
         super.onCreate()
         hapticProvider = HapticFeedbackProvider(this)
-        startForeground(1, createNotification())
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                1,
+                createNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(1, createNotification())
+        }
+
         setupOverlay()
         telephonyManager = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
-        telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+        }
     }
 
     private fun setupOverlay() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        overlayView = FrameLayout(this).apply { setBackgroundColor(Color.TRANSPARENT); alpha = 0.01f }
+        
+        // El contenedor principal invisible
+        overlayView = FrameLayout(this).apply { 
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        // Creamos la "Tarjeta" visual (TextView con estilo)
+        moveCard = TextView(this).apply {
+            val shape = GradientDrawable().apply {
+                setColor(Color.parseColor("#CC000000")) // Negro traslúcido
+                cornerRadius = 30f
+                setStroke(3, Color.WHITE)
+            }
+            background = shape
+            setTextColor(Color.WHITE)
+            textSize = 32f
+            gravity = Gravity.CENTER
+            setPadding(40, 20, 40, 20)
+            visibility = View.GONE
+        }
+
+        val cardParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+        overlayView.addView(moveCard, cardParams)
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -69,13 +118,24 @@ class HapticChessService : Service() {
                 return true
             }
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                val sq = Square.fromValue("${('A' + currentColumn)}${currentRow + 1}")
-                if (isSelectingOrigin) { originSquare = sq; hapticProvider.confirmTone(); isSelectingOrigin = false }
-                else {
+                val colChar = ('A' + currentColumn).toChar()
+                val rowNum = currentRow + 1
+                val sq = Square.fromValue("$colChar$rowNum")
+
+                if (isSelectingOrigin) {
+                    originSquare = sq
+                    hapticProvider.confirmTone()
+                    isSelectingOrigin = false
+                } else {
                     originSquare?.let { from ->
                         val m = Move(from, sq)
-                        if (board.isMoveLegal(m)) { executeMove(m); isSelectingOrigin = true; originSquare = null }
-                        else hapticProvider.illegalMoveError()
+                        if (board.isMoveLegal(m, true)) {
+                            executeMove(m)
+                            isSelectingOrigin = true
+                            originSquare = null
+                        } else {
+                            hapticProvider.illegalMoveError()
+                        }
                     }
                 }
                 return true
@@ -88,19 +148,47 @@ class HapticChessService : Service() {
                 val now = System.currentTimeMillis()
                 if (now - lastTapTime < 300) tapCount++ else tapCount = 1
                 lastTapTime = now
-                if (tapCount == 3) { lastBestMove?.let { hapticProvider.vibrateMove(it) }; tapCount = 0 }
+                if (tapCount == 3) {
+                    lastBestMove?.let { showMoveVisual(it) }
+                    tapCount = 0
+                }
             }
             gestureDetector.onTouchEvent(event); true
         }
         windowManager.addView(overlayView, params)
     }
 
+    private fun showMoveVisual(moveStr: String) {
+        if (moveStr.length < 4) return
+        
+        // Formateamos para que sea legible, ej: "e2 -> e4"
+        val displayMove = "${moveStr.substring(0, 2).uppercase()} \u279E ${moveStr.substring(2, 4).uppercase()}"
+        
+        mainHandler.post {
+            moveCard.text = displayMove
+            moveCard.visibility = View.VISIBLE
+            
+            // Vibración de aviso
+            hapticProvider.confirmTone()
+            
+            // Ocultar tras 2 segundos
+            mainHandler.postDelayed({
+                moveCard.visibility = View.GONE
+            }, 2000)
+        }
+    }
+
     private fun executeMove(move: Move) {
-        board.doMove(move); val fen = board.fen; hapticProvider.heartbeat()
+        board.doMove(move)
+        val fen = board.fen
+        hapticProvider.heartbeat()
+
         Thread {
-            val best = engine.getBestMove(fen); lastBestMove = best
-            val temp = board.clone(); temp.doMove(Move(best, board.sideToMove))
-            hapticProvider.vibrateMove(best, temp.isKingInCheck)
+            val bestStr = engine.getBestMove(fen)
+            lastBestMove = bestStr
+            
+            // Mostramos la jugada visualmente en vez de la secuencia larga de vibraciones
+            showMoveVisual(bestStr)
         }.start()
     }
 
@@ -110,12 +198,18 @@ class HapticChessService : Service() {
             val chan = NotificationChannel(channelId, "Service", NotificationManager.IMPORTANCE_LOW)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(chan)
         }
-        return NotificationCompat.Builder(this, channelId).setContentTitle("Activo").setSmallIcon(android.R.drawable.ic_lock_idle_lock).build()
+        return NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Motor Háptico Activo")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
+        }
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
         hapticProvider.illegalMoveError()
     }

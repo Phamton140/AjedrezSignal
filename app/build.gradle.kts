@@ -5,14 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.ajedrezsignal"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.ajedrezsignal"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -47,17 +45,15 @@ android {
 }
 
 dependencies {
-    // Mantén las que ya tenías (usando el catálogo libs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.constraintlayout)
+    
+    // Usando el catálogo de versiones (libs.versions.toml)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.chesslib)
 
-    // Agrega estas tres que son vitales para el proyecto
-    implementation("androidx.lifecycle:lifecycle-service:2.7.0")
-    implementation("com.github.bhlangonijr:chesslib:1.3.3")
-
-    // Pruebas (opcional, pero déjalas por si acaso)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
